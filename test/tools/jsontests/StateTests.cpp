@@ -209,6 +209,7 @@ BOOST_AUTO_TEST_CASE(stBugs){}
 BOOST_AUTO_TEST_CASE(stShift){}
 BOOST_AUTO_TEST_CASE(stCreate2){}
 BOOST_AUTO_TEST_CASE(stExtCodeHash){}
+BOOST_AUTO_TEST_CASE(stSStoreTest){}
 
 //Stress Tests
 BOOST_AUTO_TEST_CASE(stAttackTest){}

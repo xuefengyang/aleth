@@ -66,7 +66,7 @@ void SealEngineFace::verify(Strictness _s, BlockHeader const& _bi, BlockHeader c
 {
     _bi.verify(_s, _parent, _block);
 
-    if (_s != CheckNothingNew)
+    if (_s != CheckNothingNew && _s != JustSeal)
     {
         if (_bi.difficulty() < chainParams().minimumDifficulty)
             BOOST_THROW_EXCEPTION(

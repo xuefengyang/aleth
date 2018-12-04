@@ -15,51 +15,58 @@
     along with aleth.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <boost/program_options.hpp>
-#include <boost/program_options/options_description.hpp>
+#include <libdevcore/FileSystem.h>
 #include <libdevcore/LoggingProgramOptions.h>
 #include <libp2p/Host.h>
+#include <boost/program_options.hpp>
+#include <boost/program_options/options_description.hpp>
 #include <iostream>
 #include <thread>
 
 namespace po = boost::program_options;
+namespace fs = boost::filesystem;
 
 using namespace dev;
 using namespace dev::p2p;
 using namespace std;
 
-namespace
-{
-unsigned const c_lineWidth = 160;
-
-class ExitHandler
-{
-public:
-    static void exitHandler(int) { s_shouldExit = true; }
-    bool shouldExit() const { return s_shouldExit; }
-
-private:
-    static bool s_shouldExit;
-};
-
-bool ExitHandler::s_shouldExit = false;
-}
-
 int main(int argc, char** argv)
 {
     setDefaultOrCLocale();
 
-    po::options_description generalOptions("GENERAL OPTIONS", c_lineWidth);
+    string const ProgramName = "aleth-bootnode";
+    string const NetworkConfigFileName = ProgramName + "-network.rlp";
+
+    /// Networking params.
+    string listenIP;
+    unsigned short listenPort = c_defaultIPPort;
+    string publicIP;
+    bool upnp = true;
+
+    po::options_description generalOptions("GENERAL OPTIONS", lineWidth());
     auto addGeneralOption = generalOptions.add_options();
     addGeneralOption("help,h", "Show this help message and exit\n");
 
     LoggingOptions loggingOptions;
-     po::options_description loggingProgramOptions(
-        createLoggingProgramOptions(c_lineWidth, loggingOptions));
-    
+    po::options_description loggingProgramOptions(
+        createLoggingProgramOptions(lineWidth(), loggingOptions));
+
+    po::options_description clientNetworking("NETWORKING", lineWidth());
+    auto addNetworkingOption = clientNetworking.add_options();
+    addNetworkingOption("public-ip", po::value<string>()->value_name("<ip>"),
+        "Force advertised public IP to the given IP (default: auto)");
+    addNetworkingOption("listen-ip", po::value<string>()->value_name("<ip>(:<port>)"),
+        "Listen on the given IP for incoming connections (default: 0.0.0.0)");
+    addNetworkingOption("listen", po::value<unsigned short>()->value_name("<port>"),
+        "Listen on the given port for incoming connections (default: 30303)");
+#if ETH_MINIUPNPC
+    addNetworkingOption(
+        "upnp", po::value<string>()->value_name("<on/off>"), "Use UPnP for NAT (default: on)");
+#endif
+
     po::options_description allowedOptions("Allowed options");
-    allowedOptions.add(generalOptions);
-    allowedOptions.add(loggingProgramOptions);
+    allowedOptions.add(generalOptions).add(loggingProgramOptions).add(clientNetworking);
+
     po::variables_map vm;
     try
     {
@@ -69,26 +76,37 @@ int main(int argc, char** argv)
     }
     catch (po::error const& e)
     {
-        cout << e.what() << endl;
+        cout << e.what() << "\n";
         return -1;
     }
-    
+
     if (vm.count("help"))
     {
         cout << "NAME:\n"
-             << "   aleth-bootnode\n"
+             << ProgramName << "\n"
              << "USAGE:\n"
-             << "   aleth-bootnode [options]\n\n";
-        cout << generalOptions << loggingProgramOptions;
+             << "   " << ProgramName << " [options]\n\n";
+        cout << generalOptions << clientNetworking << loggingProgramOptions;
         return 0;
     }
+    if (vm.count("public-ip"))
+        publicIP = vm["public-ip"].as<string>();
+    if (vm.count("listen-ip"))
+        listenIP = vm["listen-ip"].as<string>();
+    if (vm.count("listen"))
+        listenPort = vm["listen"].as<unsigned short>();
 
     setupLogging(loggingOptions);
-
     if (loggingOptions.verbosity > 0)
-        cout << EthGrayBold "aleth-bootnode, a C++ Ethereum bootnode implementation" EthReset << "\n";
+        cout << EthGrayBold << ProgramName << ", a C++ Ethereum bootnode implementation" EthReset
+             << "\n";
 
-    Host h("aleth-bootnode");
+    auto netPrefs = publicIP.empty() ? NetworkConfig(listenIP, listenPort, upnp) :
+                                       NetworkConfig(publicIP, listenIP, listenPort, upnp);
+    auto netData = contents(getDataDir() / fs::path(NetworkConfigFileName));
+
+    // TODO: Compose client version
+    Host h(ProgramName, netPrefs, &netData);
     h.start();
 
     cout << "Node ID: " << h.enode() << endl;
@@ -97,11 +115,15 @@ int main(int argc, char** argv)
     signal(SIGTERM, &ExitHandler::exitHandler);
     signal(SIGABRT, &ExitHandler::exitHandler);
     signal(SIGINT, &ExitHandler::exitHandler);
-   
+
     while (!exitHandler.shouldExit())
         this_thread::sleep_for(chrono::milliseconds(1000));
 
     h.stop();
+
+    netData = h.saveNetwork();
+    if (!netData.empty())
+        writeFile(getDataDir() / fs::path(NetworkConfigFileName), &netData);
 
     return 0;
 }

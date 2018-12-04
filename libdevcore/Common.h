@@ -303,4 +303,16 @@ enum class WithExisting: int
 int64_t utcTime();
 
 void setDefaultOrCLocale();
+
+unsigned lineWidth();
+
+class ExitHandler
+{
+public:
+    static void exitHandler(int) { s_shouldExit = true; }
+    bool shouldExit() const { return s_shouldExit; }
+
+private:
+    static bool s_shouldExit;
+};
 }

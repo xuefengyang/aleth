@@ -14,10 +14,6 @@
  You should have received a copy of the GNU General Public License
  along with cpp-ethereum.  If not, see <http://www.gnu.org/licenses/>.
  */
-/** @file NodeTable.cpp
- * @author Alex Leverington <nessence@gmail.com>
- * @date 2014
- */
 
 #include "NodeTable.h"
 using namespace std;
@@ -32,7 +28,17 @@ namespace
 BOOST_LOG_INLINE_GLOBAL_LOGGER_CTOR_ARGS(g_discoveryWarnLogger,
     boost::log::sources::severity_channel_logger_mt<>,
     (boost::log::keywords::severity = 0)(boost::log::keywords::channel = "discov"))
+
+const unsigned c_handleTimeoutsIntervalMs = 5000;
+
 }  // namespace
+
+std::chrono::seconds const DiscoveryDatagram::c_timeToLive{60};
+std::chrono::milliseconds const NodeTable::c_evictionCheckInterval{75};
+std::chrono::milliseconds const NodeTable::c_reqTimeout{300};
+std::chrono::milliseconds const NodeTable::c_bucketRefresh{7200};
+uint32_t const NodeTable::c_bondingTimeSeconds = 12 * 60 * 60;
+
 
 inline bool operator==(
     std::weak_ptr<NodeEntry> const& _weak, std::shared_ptr<NodeEntry> const& _shared)
@@ -61,6 +67,7 @@ NodeTable::NodeTable(
     {
         m_socketPointer->connect();
         doDiscovery();
+        doHandleTimeouts();
     }
     catch (std::exception const& _e)
     {
@@ -86,7 +93,9 @@ void NodeTable::addNode(Node const& _node, NodeRelation _relation)
     if (_relation == Known)
     {
         auto nodeEntry = make_shared<NodeEntry>(m_hostNode.id, _node.id, _node.endpoint);
-        nodeEntry->pending = false;
+        // mark as validated
+        // TODO get last pong time as input, ping if needed
+        nodeEntry->lastPongReceivedTime = RLPXDatagramFace::secondsSinceEpoch();
         DEV_GUARDED(x_nodes) { m_allNodes[_node.id] = nodeEntry; }
         noteActiveNode(_node.id, _node.endpoint);
         return;
@@ -101,10 +110,10 @@ void NodeTable::addNode(Node const& _node, NodeRelation _relation)
             return;
     }
 
-    auto ret = make_shared<NodeEntry>(m_hostNode.id, _node.id, _node.endpoint);
-    DEV_GUARDED(x_nodes) { m_allNodes[_node.id] = ret; }
+    auto nodeEntry = make_shared<NodeEntry>(m_hostNode.id, _node.id, _node.endpoint);
+    DEV_GUARDED(x_nodes) { m_allNodes[_node.id] = nodeEntry; }
     LOG(m_logger) << "addNode pending for " << _node.endpoint;
-    ping(_node.endpoint);
+    ping(*nodeEntry);
 }
 
 list<NodeID> NodeTable::nodes() const
@@ -269,19 +278,20 @@ vector<shared_ptr<NodeEntry>> NodeTable::nearestNodeEntries(NodeID _target)
     return ret;
 }
 
-void NodeTable::ping(NodeIPEndpoint _to) const
+void NodeTable::ping(NodeEntry& _nodeEntry)
 {
-    NodeIPEndpoint src;
-    DEV_GUARDED(x_nodes) { src = m_hostNode.endpoint; }
-    PingNode p(src, _to);
-    p.sign(m_secret);
-    m_socketPointer->send(p);
-}
+    m_timers.schedule(0, [this, _nodeEntry](boost::system::error_code const& _ec) {
+        if (_ec || m_timers.isStopped())
+            return;
 
-void NodeTable::ping(NodeEntry* _n) const
-{
-    if (_n)
-        ping(_n->endpoint);
+        NodeIPEndpoint src;
+        DEV_GUARDED(x_nodes) { src = m_hostNode.endpoint; }
+        PingNode p(src, _nodeEntry.endpoint);
+        auto const pingHash = p.sign(m_secret);
+        m_socketPointer->send(p);
+
+        m_sentPings[_nodeEntry.id] = std::make_pair(chrono::steady_clock::now(), pingHash);
+    });
 }
 
 void NodeTable::evict(shared_ptr<NodeEntry> _leastSeen, shared_ptr<NodeEntry> _new)
@@ -299,7 +309,7 @@ void NodeTable::evict(shared_ptr<NodeEntry> _leastSeen, shared_ptr<NodeEntry> _n
 
     if (evicts == 1)
         doCheckEvictions();
-    ping(_leastSeen.get());
+    ping(*_leastSeen);
 }
 
 void NodeTable::noteActiveNode(Public const& _pubk, bi::udp::endpoint const& _endpoint)
@@ -309,7 +319,8 @@ void NodeTable::noteActiveNode(Public const& _pubk, bi::udp::endpoint const& _en
         return;
 
     shared_ptr<NodeEntry> newNode = nodeEntry(_pubk);
-    if (newNode && !newNode->pending)
+    if (newNode && RLPXDatagramFace::secondsSinceEpoch() <
+                       newNode->lastPongReceivedTime + c_bondingTimeSeconds)
     {
         LOG(m_logger) << "Noting active node: " << _pubk << " " << _endpoint.address().to_string()
                       << ":" << _endpoint.port();
@@ -402,49 +413,60 @@ void NodeTable::onPacketReceived(
         {
             case Pong::type:
             {
-                auto in = dynamic_cast<Pong const&>(*packet);
-                // whenever a pong is received, check if it's in m_evictions
-                bool found = false;
-                NodeID leastSeenID;
-                EvictionTimeout evictionEntry;
-                DEV_GUARDED(x_evictions)
-                { 
-                    auto e = m_evictions.find(in.sourceid);
-                    if (e != m_evictions.end())
-                    { 
-                        if (e->second.evictedTimePoint > std::chrono::steady_clock::now())
-                        {
-                            found = true;
-                            leastSeenID = e->first;
-                            evictionEntry = e->second;
-                            m_evictions.erase(e);
-                        }
-                    }
+                auto pong = dynamic_cast<Pong const&>(*packet);
+                auto const sourceId = pong.sourceid;
+
+                // validate pong
+                auto const sentPing = m_sentPings.find(sourceId);
+                if (sentPing == m_sentPings.end())
+                {
+                    LOG(m_logger) << "Unsolicited PONG from " << _from.address().to_string() << ":"
+                                  << _from.port();
+                    return;
                 }
 
-                if (found)
+                if (pong.echo != sentPing->second.second)
                 {
-                    if (auto n = nodeEntry(evictionEntry.newNodeID))
+                    LOG(m_logger) << "Invalid PONG from " << _from.address().to_string() << ":"
+                                  << _from.port();
+                    return;
+                }
+
+                m_sentPings.erase(sentPing);
+                auto const sourceNodeEntry = nodeEntry(sourceId);
+                assert(sourceNodeEntry.get());
+                sourceNodeEntry->lastPongReceivedTime = RLPXDatagramFace::secondsSinceEpoch();
+
+                // Whenever a pong is received, check if it's in m_evictions.
+                // Don't evict it if valid PONG received.
+                EvictionTimeout evictionEntry;
+                NodeID replacementNodeID;
+                DEV_GUARDED(x_evictions)
+                {
+                    auto e = m_evictions.find(sourceId);
+                    // FIXME timeout check is always false
+                    if (e != m_evictions.end() &&
+                        e->second.evictedTimePoint > std::chrono::steady_clock::now())
+                    {
+                        replacementNodeID = e->second.newNodeID;
+                        m_evictions.erase(e);
+                    }
+                }
+                // if we don't want to evict, we don't need to remember replacement anymore
+                if (replacementNodeID)
+                    if (auto n = nodeEntry(replacementNodeID))
                         dropNode(n);
-                    if (auto n = nodeEntry(leastSeenID))
-                        n->pending = false;
-                }
-                else
-                {
-                    if (auto n = nodeEntry(in.sourceid))
-                        n->pending = false;
-                }
-                
+
                 // update our endpoint address and UDP port
                 DEV_GUARDED(x_nodes)
                 {
                     if ((!m_hostNode.endpoint || !m_hostNode.endpoint.isAllowed()) &&
-                        isPublicAddress(in.destination.address()))
-                        m_hostNode.endpoint.setAddress(in.destination.address());
-                    m_hostNode.endpoint.setUdpPort(in.destination.udpPort());
+                        isPublicAddress(pong.destination.address()))
+                        m_hostNode.endpoint.setAddress(pong.destination.address());
+                    m_hostNode.endpoint.setUdpPort(pong.destination.udpPort());
                 }
 
-                LOG(m_logger) << "PONG from " << in.sourceid << " " << _from;
+                LOG(m_logger) << "PONG from " << sourceId << " " << _from;
                 break;
             }
                 
@@ -544,7 +566,7 @@ void NodeTable::doCheckEvictions()
                     if (it != m_allNodes.end())
                         drop.push_back(it->second);
                 }
-            evictionsRemain = (m_evictions.size() - drop.size() > 0);
+            evictionsRemain = (drop.size() != m_evictions.size());
         }
         
         drop.unique();
@@ -574,6 +596,24 @@ void NodeTable::doDiscovery()
         crypto::Nonce::get().ref().copyTo(randNodeId.ref().cropped(0, h256::size));
         crypto::Nonce::get().ref().copyTo(randNodeId.ref().cropped(h256::size, h256::size));
         doDiscover(randNodeId);
+    });
+}
+
+void NodeTable::doHandleTimeouts()
+{
+    m_timers.schedule(c_handleTimeoutsIntervalMs, [this](boost::system::error_code const& _ec) {
+        if ((_ec && _ec.value() == boost::asio::error::operation_aborted) || m_timers.isStopped())
+            return;
+
+        for (auto it = m_sentPings.begin(); it != m_sentPings.end();)
+        {
+            if (chrono::steady_clock::now() > it->second.first + DiscoveryDatagram::c_timeToLive)
+                it = m_sentPings.erase(it);
+            else
+                ++it;
+        }
+
+        doHandleTimeouts();
     });
 }
 

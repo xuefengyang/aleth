@@ -53,16 +53,16 @@ int main(int argc, char** argv)
 
     po::options_description clientNetworking("NETWORKING", lineWidth());
     auto addNetworkingOption = clientNetworking.add_options();
+#if ETH_MINIUPNPC
+    addNetworkingOption(
+        "upnp", po::value<string>()->value_name("<on/off>"), "Use UPnP for NAT (default: on)");
+#endif
     addNetworkingOption("public-ip", po::value<string>()->value_name("<ip>"),
         "Force advertised public IP to the given IP (default: auto)");
     addNetworkingOption("listen-ip", po::value<string>()->value_name("<ip>(:<port>)"),
         "Listen on the given IP for incoming connections (default: 0.0.0.0)");
     addNetworkingOption("listen", po::value<unsigned short>()->value_name("<port>"),
-        "Listen on the given port for incoming connections (default: 30303)");
-#if ETH_MINIUPNPC
-    addNetworkingOption(
-        "upnp", po::value<string>()->value_name("<on/off>"), "Use UPnP for NAT (default: on)");
-#endif
+        "Listen on the given port for incoming connections (default: 30303)\n");
 
     po::options_description allowedOptions("Allowed options");
     allowedOptions.add(generalOptions).add(loggingProgramOptions).add(clientNetworking);
@@ -83,7 +83,7 @@ int main(int argc, char** argv)
     if (vm.count("help"))
     {
         cout << "NAME:\n"
-             << ProgramName << "\n"
+             << "   " << ProgramName << "\n"
              << "USAGE:\n"
              << "   " << ProgramName << " [options]\n\n";
         cout << generalOptions << clientNetworking << loggingProgramOptions;

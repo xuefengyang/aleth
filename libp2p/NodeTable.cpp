@@ -20,6 +20,7 @@
  */
 
 #include "NodeTable.h"
+#include "libethcore/Exceptions.h"
 using namespace std;
 
 namespace dev
@@ -53,7 +54,7 @@ string datagramNameFromType(uint8_t _t)
         if (entry.type == _t)
             return entry.name;
     }
-    return "UNKNOWN";
+    BOOST_THROW_EXCEPTION(dev::eth::InvalidDatagramType());
 }
 
 }  // namespace

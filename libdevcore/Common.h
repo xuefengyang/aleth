@@ -315,4 +315,7 @@ public:
 private:
     static bool s_shouldExit;
 };
-}
+
+bool isTrue(std::string const& _m);
+bool isFalse(std::string const& _m);
+}  // namespace dev

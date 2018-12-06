@@ -14,13 +14,6 @@
     You should have received a copy of the GNU General Public License
     along with cpp-ethereum.  If not, see <http://www.gnu.org/licenses/>.
 */
-/**
- * @file main.cpp
- * @author Gav Wood <i@gavwood.com>
- * @author Tasha Carl <tasha@carl.pro> - I here by place all my contributions in this file under MIT licence, as specified by http://opensource.org/licenses/MIT.
- * @date 2014
- * Ethereum client.
- */
 
 #include <thread>
 #include <fstream>
@@ -82,16 +75,6 @@ void version()
     cout << "eth network protocol version: " << dev::eth::c_protocolVersion << "\n";
     cout << "Client database version: " << dev::eth::c_databaseVersion << "\n";
     cout << "Build: " << buildinfo->system_name << "/" << buildinfo->build_type << "\n";
-}
-
-bool isTrue(std::string const& _m)
-{
-    return _m == "on" || _m == "yes" || _m == "true" || _m == "1";
-}
-
-bool isFalse(std::string const& _m)
-{
-    return _m == "off" || _m == "no" || _m == "false" || _m == "0";
 }
 
 void importPresale(KeyManager& _km, string const& _file, function<string()> _pass)

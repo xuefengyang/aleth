@@ -92,6 +92,24 @@ int main(int argc, char** argv)
     unsigned short listenPort = c_defaultIPPort;
     string publicIP;
     bool upnp = true;
+
+#if ETH_MINIUPNPC
+    if (vm.count("upnp"))
+    {
+        string m = vm["upnp"].as<string>();
+        if (isTrue(m))
+            upnp = true;
+        else if (isFalse(m))
+            upnp = false;
+        else
+        {
+            cerr << "Bad "
+                 << "--upnp"
+                 << " option: " << m << "\n";
+            return -1;
+        }
+    }
+#endif
     if (vm.count("public-ip"))
         publicIP = vm["public-ip"].as<string>();
     if (vm.count("listen-ip"))

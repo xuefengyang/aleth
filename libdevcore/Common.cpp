@@ -127,4 +127,15 @@ void setDefaultOrCLocale()
 }
 
 bool ExitHandler::s_shouldExit = false;
+
+bool isTrue(std::string const& _m)
+{
+    return _m == "on" || _m == "yes" || _m == "true" || _m == "1";
 }
+
+bool isFalse(std::string const& _m)
+{
+    return _m == "off" || _m == "no" || _m == "false" || _m == "0";
+}
+
+}  // namespace dev

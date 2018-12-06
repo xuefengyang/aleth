@@ -180,6 +180,7 @@ void NodeTable::doDiscover(NodeID _node, unsigned _round, shared_ptr<set<shared_
             p.sign(m_secret);
             DEV_GUARDED(x_findNodeTimeout)
                 m_findNodeTimeout.push_back(make_pair(r->id, chrono::steady_clock::now()));
+            LOG(m_logger) << "Sending " << p.typeName() << " to " << _node << "@" << r->endpoint.address() << ":" << r->endpoint.udpPort();
             m_socketPointer->send(p);
         }
     
@@ -283,7 +284,9 @@ void NodeTable::ping(NodeIPEndpoint _to) const
 void NodeTable::ping(NodeEntry* _n) const
 {
     if (_n)
+    {
         ping(_n->endpoint);
+    }
 }
 
 void NodeTable::evict(shared_ptr<NodeEntry> _leastSeen, shared_ptr<NodeEntry> _new)
@@ -484,7 +487,7 @@ void NodeTable::onPacketReceived(
                 for (unsigned offset = 0; offset < nearest.size(); offset += nlimit)
                 {
                     Neighbours out(_from, nearest, offset, nlimit);
-                    LOG(m_logger) << "Sending " << packet->typeName() << " to " << out.sourceid << "@" << _from.address() << ":" << _from.port();
+                    LOG(m_logger) << "Sending " << out.typeName() << " to " << in.sourceid << "@" << _from.address() << ":" << _from.port();
                     out.sign(m_secret);
                     if (out.data.size() > 1280)
                         cnetlog << "Sending truncated datagram, size: " << out.data.size();
@@ -501,7 +504,7 @@ void NodeTable::onPacketReceived(
                 addNode(Node(in.sourceid, in.source));
                 
                 Pong p(in.source);
-                LOG(m_logger) << "Sending " << packet->typeName() << " to " << in.sourceid << "@" << _from.address() << ":" << _from.port();
+                LOG(m_logger) << "Sending " << p.typeName() << " to " << in.sourceid << "@" << _from.address() << ":" << _from.port();
                 p.echo = in.echo;
                 p.sign(m_secret);
                 m_socketPointer->send(p);

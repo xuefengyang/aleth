@@ -126,12 +126,5 @@ void setDefaultOrCLocale()
 #endif
 }
 
-static unsigned const c_lineWidth = 160;
-
-unsigned lineWidth()
-{
-    return c_lineWidth;
-}
-
 bool ExitHandler::s_shouldExit = false;
 }

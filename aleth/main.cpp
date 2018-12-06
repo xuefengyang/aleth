@@ -784,13 +784,12 @@ int main(int argc, char** argv)
     netPrefs.pin = vm.count("pin") != 0;
 
     auto nodesState = contents(getDataDir() / fs::path("network.rlp"));
-    auto caps = set<string>{"eth"};
 
     if (testingMode)
         chainParams.allowFutureBlocks = true;
 
     dev::WebThreeDirect web3(WebThreeDirect::composeClientVersion("aleth"), db::databasePath(),
-        snapshotPath, chainParams, withExisting, caps, netPrefs, &nodesState, testingMode);
+        snapshotPath, chainParams, withExisting, netPrefs, &nodesState, testingMode);
 
     if (!extraData.empty())
         web3.ethereum()->setExtraData(extraData);
